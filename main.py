@@ -1,10 +1,9 @@
-
 from qreader import QReader
 import sys
 import cv2
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QFileDialog, QSlider,QLabel,QGridLayout
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QSlider,QLabel,QGridLayout
 from PySide6.QtCore import QThread, Signal, Qt
 import qdarktheme
 import zxingcpp
@@ -21,10 +20,11 @@ class VideoThread(QThread):
     def run(self):
 
         self.cap = cv2.VideoCapture(0)
+        
         if not self.cap.isOpened():
             print("Erro: Não foi possível abrir a câmera.")
             return
-
+        
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2592)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)
         self.cap.set(cv2.CAP_PROP_FPS, 200)
@@ -34,7 +34,6 @@ class VideoThread(QThread):
             if ret:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 frame = np.flipud(frame)
-                self.parent_main.img1a.setImage(frame.astype(np.float32), levels=(0, 255))
                 self.frame_signal.emit(frame)  
 
     def stop(self):
@@ -44,22 +43,33 @@ class VideoThread(QThread):
 
 class QreaderBarCodeThread(QThread):
 
-    result_brcode_qreader = Signal(str)  
-    result_barcode = Signal(str)
-
+    result_brcode_qreader = Signal(dict)
+    
     def __init__(self,rois_regions,qreader):
         super().__init__()
         self.rois_regions = rois_regions
         self.qreader = qreader
 
     def run(self):
-         for i, roi_region in enumerate(self.rois_regions):
+        
+        dados = {
+             "qrcode" :[],
+             "barcode":[]
+         }
+         
+        for i, roi_region in enumerate(self.rois_regions):
             roi_region_item = np.array(roi_region, dtype=np.uint8)
-            codebarras_text = self.detect_barcodes(roi_region_item)
+            
             decoded_text = self.qreader.detect_and_decode(roi_region_item)
-
-            self.result_barcode.emit(f"{codebarras_text}")
-            self.result_brcode_qreader.emit(f"{decoded_text}") 
+            if decoded_text:
+                dados["qrcode"].append(decoded_text[0])
+            else:
+                codebarras_text = self.detect_barcodes(roi_region_item)
+                if codebarras_text:
+                    dados["barcode"].append(codebarras_text)
+            
+            
+        self.result_brcode_qreader.emit(dados)
            
     def detect_barcodes(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -137,6 +147,9 @@ class ROIExamples(QMainWindow):
         self.read_qr_button.clicked.connect(self.read_qr_code)
         self.layout_grid_principal.addWidget(self.read_qr_button, 2, 2)
 
+        # Sliders com Labels
+        self.focus_label = QLabel("Foco")
+        self.layout_grid_principal.addWidget(self.focus_label, 4, 0)
         self.focus_slider = QSlider(Qt.Horizontal)
         self.focus_slider.setMinimum(0)
         self.focus_slider.setMaximum(1000)
@@ -144,8 +157,10 @@ class ROIExamples(QMainWindow):
         self.focus_slider.setTickInterval(5)
         self.focus_slider.setTickPosition(QSlider.TicksBelow)
         self.focus_slider.valueChanged.connect(self.set_focus)
-        self.layout_grid_principal.addWidget(self.focus_slider, 4, 0, 1, 3)
+        self.layout_grid_principal.addWidget(self.focus_slider, 4, 1, 1, 2)
 
+        self.brilho_label = QLabel("Brilho")
+        self.layout_grid_principal.addWidget(self.brilho_label, 5, 0)
         self.brilho_slider = QSlider(Qt.Horizontal)
         self.brilho_slider.setMinimum(-100)
         self.brilho_slider.setMaximum(100)
@@ -153,8 +168,31 @@ class ROIExamples(QMainWindow):
         self.brilho_slider.setTickInterval(5)
         self.brilho_slider.setTickPosition(QSlider.TicksBelow)
         self.brilho_slider.valueChanged.connect(self.set_brilho)
-        self.layout_grid_principal.addWidget(self.brilho_slider, 5, 0, 1, 3)
+        self.layout_grid_principal.addWidget(self.brilho_slider, 5, 1, 1, 2)
 
+        self.contraste_label = QLabel("Contraste")
+        self.layout_grid_principal.addWidget(self.contraste_label, 6, 0)
+        self.contraste_slider = QSlider(Qt.Horizontal)
+        self.contraste_slider.setMinimum(-100)
+        self.contraste_slider.setMaximum(100)
+        self.contraste_slider.setValue(0)
+        self.contraste_slider.setTickInterval(5)
+        self.contraste_slider.setTickPosition(QSlider.TicksBelow)
+        self.contraste_slider.valueChanged.connect(self.set_contraste)
+        self.layout_grid_principal.addWidget(self.contraste_slider, 6, 1, 1, 2)
+
+        self.saturation_label = QLabel("Saturação")
+        self.layout_grid_principal.addWidget(self.saturation_label, 7, 0)
+        self.saturation_slider = QSlider(Qt.Horizontal)
+        self.saturation_slider.setMinimum(-100)
+        self.saturation_slider.setMaximum(100)
+        self.saturation_slider.setValue(0)
+        self.saturation_slider.setTickInterval(5)
+        self.saturation_slider.setTickPosition(QSlider.TicksBelow)
+        self.saturation_slider.valueChanged.connect(self.set_saturation)
+        self.layout_grid_principal.addWidget(self.saturation_slider, 7, 1, 1, 2)
+
+    
         self.rois = []
         
         
@@ -170,15 +208,20 @@ class ROIExamples(QMainWindow):
         self.video_thread.frame_signal.connect(self.update_frame)
         self.video_thread.start()
         
-
     def add_new_roi(self):
-        new_roi = pg.RectROI([20, 20], [100, 100], pen=(0, 9))
+        view_range = self.v1a.viewRange()
+        center_x = (view_range[0][0] + view_range[0][1]) / 2
+        center_y = (view_range[1][0] + view_range[1][1]) / 2
+        roi_width, roi_height = 100, 100
+        new_roi = pg.RectROI([center_x - roi_width / 2, center_y - roi_height / 2], [roi_width, roi_height], pen=(0, 9))
         new_roi.addRotateHandle([1, 0], [0.5, 0.5])
         self.v1a.addItem(new_roi)
         self.rois.append(new_roi)
+        
 
     def update_frame(self, frame):
         self.current_frame = frame
+        self.img1a.setImage(frame.astype(np.float32), levels=(0, 255))
 
 
     def save_rois(self):
@@ -217,10 +260,14 @@ class ROIExamples(QMainWindow):
             print("Thread anterior ainda está ativa. Aguardando término.")
             return
         
+  
         rois_regions = []
         
+        frame_atual = self.current_frame.copy()
+        ima1a_atual = self.img1a
+        
         for i, roi in enumerate(self.rois):
-            roi_region = roi.getArrayRegion(self.current_frame, self.img1a)
+            roi_region = roi.getArrayRegion(frame_atual, ima1a_atual)
             if roi_region is not None:
                 roi_region = np.array(roi_region, dtype=np.uint8)
                 rois_regions.append(roi_region)
@@ -232,16 +279,12 @@ class ROIExamples(QMainWindow):
                                                       rois_regions,
                                                       self.qreader)
         self.thread_barcode_qreader.result_brcode_qreader.connect(self.result_barcode_qreader)
-        self.thread_barcode_qreader.result_barcode.connect(self.result_barcode)
         self.thread_barcode_qreader.start()
 
-    def result_barcode(self,value):
-        print("RESULTADO BARCODE : ",value)
 
     def result_barcode_qreader(self,value):
-        print("RESULTADO QRCODE : ",value)
-        self.text_result_qr.setText(f"RESULTADO : {value}")
-
+        self.text_result_qr.setText(f"QRCODE : {value.get('qrcode')}           BARCODE : {value.get('barcode')}")
+        print(value)
 
     def set_focus(self, value):
         if self.video_thread.cap is not None and self.video_thread.cap.isOpened():
@@ -262,6 +305,30 @@ class ROIExamples(QMainWindow):
 
             self.video_thread.cap.set(cv2.CAP_PROP_BRIGHTNESS, value)
             print(f"Brilho ajustado para: {value}")
+            
+    def set_contraste(self,value):
+        if self.video_thread.cap is not None and self.video_thread.cap.isOpened():
+            brightness_supported = self.video_thread.cap.get(cv2.CAP_PROP_CONTRAST)
+
+            if brightness_supported == -1:
+                print("Ajuste de Contraste não suportado por esta câmera.")
+                return
+
+            self.video_thread.cap.set(cv2.CAP_PROP_CONTRAST, value)
+            print(f"Contraste  ajustado para: {value}")
+                        
+    def set_saturation(self,value):
+        
+        if self.video_thread.cap is not None and self.video_thread.cap.isOpened():
+            brightness_supported = self.video_thread.cap.get(cv2.CAP_PROP_SATURATION)
+
+            if brightness_supported == -1:
+                print("Ajuste de SATURACAO não suportado por esta câmera.")
+                return
+
+            self.video_thread.cap.set(cv2.CAP_PROP_SATURATION, value)
+            print(f"SATURACAO ajustado para: {value}")
+        
 
     def closeEvent(self, event):
         if self.video_thread is not None:
@@ -270,12 +337,8 @@ class ROIExamples(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication([])
-    qdarktheme.setup_theme("dark")
+    qdarktheme.setup_theme("light")
     window = ROIExamples()
-    window.resize(500, 500)
+    window.resize(700, 700)
     window.show()
     app.exec()
-
-
-
-    
