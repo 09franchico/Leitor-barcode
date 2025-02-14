@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QPushButton, QFileDialog, QSlider,QLabel,QGridLayout
-from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtCore import QThread, Signal, Qt,QTimer
 import qdarktheme
 import zxingcpp
 
@@ -12,22 +12,25 @@ import zxingcpp
 class VideoThread(QThread):
     frame_signal = Signal(np.ndarray) 
 
-    def __init__(self,parent):
+    def __init__(self,id_camera:int = 0, w:int = 2592, h:int=1944,fps:int = 60):
         super().__init__()
-        self.parent_main = parent
+        self.id_camera = id_camera
+        self.w = w
+        self.h = h
+        self.fps = fps
         self.running = True
 
     def run(self):
 
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(self.id_camera)
         
         if not self.cap.isOpened():
             print("Erro: Não foi possível abrir a câmera.")
             return
         
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2592)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1944)
-        self.cap.set(cv2.CAP_PROP_FPS, 200)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.w)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.h)
+        self.cap.set(cv2.CAP_PROP_FPS, self.fps)
 
         while self.running:
             ret, frame = self.cap.read()
@@ -204,7 +207,9 @@ class ROIExamples(QMainWindow):
         if self.video_thread  and self.video_thread.isRunning():
             print("Thread ja estar em execuaco")
             return
-        self.video_thread = VideoThread(self)
+
+        #w=3840,h=2160,fps=30
+        self.video_thread = VideoThread(id_camera=1)
         self.video_thread.frame_signal.connect(self.update_frame)
         self.video_thread.start()
         
@@ -221,7 +226,7 @@ class ROIExamples(QMainWindow):
 
     def update_frame(self, frame):
         self.current_frame = frame
-        self.img1a.setImage(frame.astype(np.float32), levels=(0, 255))
+        QTimer.singleShot(0, lambda: self.img1a.setImage(self.current_frame))
 
 
     def save_rois(self):
@@ -337,7 +342,7 @@ class ROIExamples(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication([])
-    qdarktheme.setup_theme("light")
+    qdarktheme.setup_theme("dark")
     window = ROIExamples()
     window.resize(700, 700)
     window.show()
