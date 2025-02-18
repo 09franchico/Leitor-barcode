@@ -9,6 +9,56 @@ import qdarktheme
 import zxingcpp
 
 
+
+class QreaderBarCodeThread(QThread):
+
+    result_brcode_qreader = Signal(dict)
+    
+    def __init__(self,rois_regions,qreader):
+        super().__init__()
+        self.rois_regions = rois_regions
+        self.qreader = qreader
+
+    def run(self):
+        
+        self.sr = cv2.dnn_superres.DnnSuperResImpl_create()
+        path = "FSRCNN_x4.pb"
+        self.sr.readModel(path)
+        self.sr.setModel("fsrcnn", 4)  
+
+        dados = {
+             "qrcode" :[],
+             "barcode":[]
+         }
+         
+        for i, roi_region in enumerate(self.rois_regions):
+            roi_region_item = np.array(roi_region, dtype=np.uint8)
+            
+            roi_region_item = self.sr.upsample(roi_region_item)  # Aumenta a qualidade
+            
+            decoded_text = self.qreader.detect_and_decode(roi_region_item)
+            if decoded_text:
+                dados["qrcode"].append(decoded_text[0])
+            else:
+                codebarras_text = self.detect_barcodes(roi_region_item)
+                if codebarras_text:
+                    dados["barcode"].append(codebarras_text)
+            
+            
+        self.result_brcode_qreader.emit(dados)
+           
+    def detect_barcodes(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        results = zxingcpp.read_barcodes(gray)
+        code_barras = ""
+        for result in results:    
+            code_barras = result.text
+        if len(results) == 0:
+            return None
+        return code_barras
+
+
+
 class VideoThread(QThread):
     frame_signal = Signal(np.ndarray) 
 
@@ -44,36 +94,74 @@ class VideoThread(QThread):
         self.cap.release()
 
 
-class QreaderBarCodeThread(QThread):
 
-    result_brcode_qreader = Signal(dict)
+
+class PlayThread(QThread):
     
-    def __init__(self,rois_regions,qreader):
-        super().__init__()
-        self.rois_regions = rois_regions
-        self.qreader = qreader
+    resultado = Signal(np.ndarray) 
 
+    def __init__(self,parent_view, qreader):
+        
+        super().__init__()
+        
+        self.parent_view = parent_view
+        self.qreader = qreader
+        self.running = True
+        
+        
     def run(self):
         
-        dados = {
-             "qrcode" :[],
-             "barcode":[]
-         }
-         
-        for i, roi_region in enumerate(self.rois_regions):
-            roi_region_item = np.array(roi_region, dtype=np.uint8)
+        self.sr = cv2.dnn_superres.DnnSuperResImpl_create()
+        path = "FSRCNN-small_x4.pb"
+        self.sr.readModel(path)
+        self.sr.setModel("fsrcnn", 4)
+
+        
+        while self.running:
             
-            decoded_text = self.qreader.detect_and_decode(roi_region_item)
-            if decoded_text:
-                dados["qrcode"].append(decoded_text[0])
-            else:
-                codebarras_text = self.detect_barcodes(roi_region_item)
-                if codebarras_text:
-                    dados["barcode"].append(codebarras_text)
+        
+            #busca os dados da tela
+            frame_atual = self.parent_view.current_frame.copy()
+            ima1a_atual = self.parent_view.img1a
+            rois = self.parent_view.rois
+            
+            dados = {
+               "qrcode" :[],
+               "barcode":[]
+            }
             
             
-        self.result_brcode_qreader.emit(dados)
-           
+            for i, roi in enumerate(rois):
+                
+                roi_region = roi.getArrayRegion(frame_atual, ima1a_atual)
+                
+                if roi_region is not None:
+                    
+                    roi_region_item = np.array(roi_region, dtype=np.uint8)
+                    roi_region_item = self.sr.upsample(roi_region_item) 
+                    
+                    #decode
+                    # decoded_text = self.qreader.detect_and_decode(roi_region_item)
+                    # if decoded_text:
+                    #     dados["qrcode"].append(decoded_text[0])
+                    # else:
+                    codebarras_text = self.detect_barcodes(roi_region_item)
+                    if codebarras_text:
+                        dados["barcode"].append(codebarras_text)
+                    
+                    
+                    
+                else:
+                    print(f"Falha ao extrair a região da ROI {i}.")
+            
+            
+            
+            if self.running == False:
+                    break
+            
+            self.resultado.emit(dados)
+            
+            
     def detect_barcodes(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         results = zxingcpp.read_barcodes(gray)
@@ -83,8 +171,11 @@ class QreaderBarCodeThread(QThread):
         if len(results) == 0:
             return None
         return code_barras
-
-
+            
+            
+                
+    def stop(self):
+        self.running = False
 
 
 class ROIExamples(QMainWindow):
@@ -108,6 +199,7 @@ class ROIExamples(QMainWindow):
         
         #--------------------------
         self.video_thread = None
+        self.play_thread = None
         self.thread_barcode_qreader = None
 
     def create_gui(self):
@@ -115,16 +207,21 @@ class ROIExamples(QMainWindow):
         self.graphics_layout_widget = pg.GraphicsLayoutWidget()
         self.w1 = self.graphics_layout_widget.addLayout(row=0, col=0)
         self.v1a = self.w1.addViewBox(row=1, col=0)
+        
+        self.v1a.setDefaultPadding(0)
         self.v1a.setMouseEnabled(x=True, y=True)
         self.v1a.enableAutoRange()
+        
+        
         self.img1a = pg.ImageItem()
         self.v1a.addItem(self.img1a)
+        
 
-        self.layout_grid_principal.addWidget(self.graphics_layout_widget, 0, 0, 1, 3)
+        self.layout_grid_principal.addWidget(self.graphics_layout_widget, 0, 0, 1, 5)
 
         # --------------------------
         self.text_result_qr = QLabel("RESULTADO:")
-        self.layout_grid_principal.addWidget(self.text_result_qr, 3, 0, 1, 3)
+        self.layout_grid_principal.addWidget(self.text_result_qr, 3, 0, 1, 5)
 
         self.open_camera = QPushButton("ABRIR CAMERA")
         self.open_camera.clicked.connect(self.open_camera_qr)
@@ -149,6 +246,14 @@ class ROIExamples(QMainWindow):
         self.read_qr_button = QPushButton("LER QRCODES")
         self.read_qr_button.clicked.connect(self.read_qr_code)
         self.layout_grid_principal.addWidget(self.read_qr_button, 2, 2)
+        
+        self.play_button = QPushButton("PLAY")
+        self.play_button.clicked.connect(self.play)
+        self.layout_grid_principal.addWidget(self.play_button, 2, 3)
+        
+        self.stop_button = QPushButton("STOP")
+        self.stop_button.clicked.connect(self.stop)
+        self.layout_grid_principal.addWidget(self.stop_button, 2, 4)
 
         # Sliders com Labels
         self.focus_label = QLabel("Foco")
@@ -204,14 +309,15 @@ class ROIExamples(QMainWindow):
             self.video_thread.stop()
         
     def open_camera_qr(self):
+        
         if self.video_thread  and self.video_thread.isRunning():
             print("Thread ja estar em execuaco")
             return
-
-        #w=3840,h=2160,fps=30
-        self.video_thread = VideoThread(id_camera=1)
+        
+        self.video_thread = VideoThread(id_camera=0,w=3840,h=3104,fps=100)
         self.video_thread.frame_signal.connect(self.update_frame)
         self.video_thread.start()
+                
         
     def add_new_roi(self):
         view_range = self.v1a.viewRange()
@@ -222,16 +328,17 @@ class ROIExamples(QMainWindow):
         new_roi.addRotateHandle([1, 0], [0.5, 0.5])
         self.v1a.addItem(new_roi)
         self.rois.append(new_roi)
+    
         
-
     def update_frame(self, frame):
-        self.current_frame = frame
-        QTimer.singleShot(0, lambda: self.img1a.setImage(self.current_frame))
+        self.current_frame = frame    
+        QTimer.singleShot(0, lambda: self.img1a.setImage(frame, autoLevels=False))
 
 
     def save_rois(self):
-        if not hasattr(self, "current_frame"):
-            print("Erro: Nenhum frame capturado.")
+        
+        if not self.rois:
+            print("Erro: Nenhuma ROI foi adicionada.")
             return
 
         save_path = QFileDialog.getExistingDirectory(self, "Escolha a pasta para salvar as ROIs")
@@ -251,12 +358,35 @@ class ROIExamples(QMainWindow):
 
     def reset_zoom(self):
         self.v1a.autoRange()
+        
+        
+    def play(self):
+        if not self.rois:
+            print("Erro: Nenhuma ROI foi adicionada.")
+            return
+        
+        if self.play_thread  and self.play_thread.isRunning():
+            print("Thread anterior ainda está ativa. Aguardando término.")
+            return
+    
+        self.text_result_qr.setText("Executando play...")
+        self.play_thread = PlayThread(parent_view=self,
+                                      qreader=self.qreader)
+        self.play_thread.resultado.connect(self.result_play)
+        self.play_thread.start()
+        
+        
+    def result_play(self,value):
+        self.text_result_qr.setText(f"EM EXECUCÃO : QRCODE : {value.get('qrcode')}           BARCODE : {value.get('barcode')}")
+        print(value)
+        
+        
+    def stop(self):
+        self.text_result_qr.setText("PARADA REALIZADA !")
+        self.play_thread.stop()
 
     def read_qr_code(self):
-        if not hasattr(self, "current_frame"):
-            print("Erro: Nenhuma imagem capturada para leitura do QR Code.")
-            return
-
+       
         if not self.rois:
             print("Erro: Nenhuma ROI foi adicionada.")
             return
@@ -278,7 +408,8 @@ class ROIExamples(QMainWindow):
                 rois_regions.append(roi_region)
             else:
                 print(f"Falha ao extrair a região da ROI {i}.")
-
+                
+        self.text_result_qr.setText("Realizando leitura...")
 
         self.thread_barcode_qreader = QreaderBarCodeThread(
                                                       rois_regions,
@@ -338,8 +469,9 @@ class ROIExamples(QMainWindow):
     def closeEvent(self, event):
         if self.video_thread is not None:
             self.video_thread.stop()
-
-
+           
+            
+    
 if __name__ == "__main__":
     app = QApplication([])
     qdarktheme.setup_theme("dark")
